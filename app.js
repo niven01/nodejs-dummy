@@ -8,6 +8,8 @@ app.get('/', (req, res) => {
 });
 
 // Start the server and listen on the specified port
-app.listen(port, () => {
+const server = app.listen(port, () => {
     console.log(`Server is running on http://localhost:${port}`);
 });
+
+module.exports = server; // Export the server instance
