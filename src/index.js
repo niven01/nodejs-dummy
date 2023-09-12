@@ -14,8 +14,8 @@ const auth = require('./auth/auth');
 const app = express();
 
 Sentry.init({
-  dsn: process.env.SENTRY_DSN,
-  tracesSampleRate: 1.0,
+	dsn: process.env.SENTRY_DSN,
+	tracesSampleRate: 1.0,
 });
 
 // middleware
@@ -29,8 +29,8 @@ app.use(cookieParser());
 app.disable('x-powered-by');
 
 // routes
-app.use('/auth', auth); 
-app.use('/jira', jira); 
+app.use('/auth', auth);
+app.use('/jira', jira);
 
 // error handler
 app.use((err, req, res, next) => {
@@ -41,7 +41,7 @@ app.use((err, req, res, next) => {
 	}
 });
 
-const port = process.env.PORT || 3010;
+const port = process.env.PORT || 8080;
 app.listen(port, () => {
 	console.log(`listening on port ${port}`);
 });
