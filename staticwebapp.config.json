@@ -1,0 +1,10 @@
+[
+  {
+    "route": "/index.html",
+    "rewrite": "/src/index.js"
+  },
+  {
+    "route": "/",
+    "rewrite": "/src/index.js"
+  }
+]
