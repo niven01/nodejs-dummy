@@ -4,8 +4,7 @@
   "description": "Red Smart Applications JWT Auth Server",
   "main": "src/index.js",
   "scripts": {
-    "build": "npm install",
-    "start": "nodemon --inspect=9222 ./src/index.js",
+    "start": "node src",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
@@ -13,8 +12,8 @@
     "express",
     "hasura"
   ],
-  "author": "",
-  "license": "",
+  "author": "Vladimir Novick",
+  "license": "ISC",
   "dependencies": {
     "@sentry/node": "^6.19.6",
     "@sentry/tracing": "^6.19.6",

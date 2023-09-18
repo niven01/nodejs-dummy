@@ -1,27 +1,16 @@
 const axios = require("axios");
 const FormData = require("form-data");
 require("dotenv").config();
-const { EMAIL_USER, EMAIL_DOMAIN, MAILGUN_AUTH } = process.env;
+const {EMAIL_USER, EMAIL_DOMAIN, MAILGUN_AUTH} = process.env;
 
-async function sendReferralEmail(
-  invitee,
-  referrer,
-  company,
-  types,
-  referral_id
-) {
+async function sendReferralEmail(invitee, referrer, company, types, referral_id) {
   return new Promise(async (resolve, reject) => {
     try {
       var data = new FormData();
       data.append("from", `Enexo <${EMAIL_USER}>`);
       data.append("to", invitee.email);
-      data.append(
-        "subject",
-        "Enexo - You've been invited to complete & share a Supply Chain Assessment"
-      );
-      data.append(
-        "html",
-        `<!DOCTYPE HTML
+      data.append("subject", "Enexo - You've been invited to complete & share a Supply Chain Assessment");
+      data.append("html", `<!DOCTYPE HTML
         PUBLIC "-//W3C//DTD XHTML 1.0 Transitional //EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
       <html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml"
         xmlns:o="urn:schemas-microsoft-com:office:office">
@@ -176,7 +165,7 @@ async function sendReferralEmail(
                                         <td style="padding-right: 0px;padding-left: 0px;" align="center">
       
                                           <img align="center" border="0"
-                                            src="https://cdn-uk1.redsmart.app/enexo/images/enexoheader.png" alt="" title=""
+                                            src="https://prd-cdn.enexo.io/enexo/images/enexoheader.png" alt="" title=""
                                             style="outline: none;text-decoration: none;-ms-interpolation-mode: bicubic;clear: both;display: inline-block !important;border: none;height: auto;float: none;width: 100%;max-width: 560px;"
                                             width="500" />
                                         </td>
@@ -252,14 +241,18 @@ async function sendReferralEmail(
                                       <tr>
                                         <td align="center">
                                           <img border="0"
-                                            src="https://cdn-uk1.redsmart.app/company-data-files/logos/${referrer.company_id}.png"
+                                            src="https://prd-cdn.enexo.io/company-data-files/logos/${
+        referrer.company_id
+      }.png"
                                             alt="" title=""
                                             style="outline: none; text-decoration: none; -ms-interpolation-mode: bicubic; clear: both; display: inline-block !important; border: none; height: auto; float: none; width: 100%; max-width: 50px;"
                                             width="100" />
                                         </td>
                                         <td align="center" style="vertical-align: middle;">
                                           <p style=" line-height: 140%;">You've received an invite on behalf of
-                                            <b>${referrer.company_name}</b>
+                                            <b>${
+        referrer.company_name
+      }</b>
                                           </p>
       
                                         </td>
@@ -311,14 +304,28 @@ async function sendReferralEmail(
                                     align="left">
       
                                     <div style="font-size: 14px; line-height: 140%; text-align: left; word-wrap: break-word;">
-                                      <p style="line-height: 140%;">Hi ${invitee.first_name},</p>
+                                      <p style="line-height: 140%;">Hi ${
+        invitee.first_name
+      },</p>
       
       
                                       <p style="line-height: 140%;"> </p>
-                                      <p style="line-height: 140%;">${referrer.first_name}
-                                      ${referrer.last_name} at ${referrer.company_name} has confirmed you
-                                        as an authorised representative of ${company.name} ${company.id} and invited you to Enexo to complete and share a Supply Chain Assessment because your organisation holds a significant position within our value
-                                        circle as a valued ${types[0]}. Enexo has been designed to support our
+                                      <p style="line-height: 140%;">${
+        referrer.first_name
+      }
+                                      ${
+        referrer.last_name
+      } at ${
+        referrer.company_name
+      } has confirmed you
+                                        as an authorised representative of ${
+        company.name
+      } ${
+        company.id
+      } and invited you to Enexo to complete and share a Supply Chain Assessment because your organisation holds a significant position within our value
+                                        circle as a valued ${
+        types[0]
+      }. Enexo has been designed to support our
                                         sustainability initiatives by providing a collaborative space where we can
                                         collectively work towards creating a greener future.</p>
                                       <p style="line-height: 140%;"> </p>
@@ -478,6 +485,13 @@ async function sendReferralEmail(
                                       <p style="line-height: 140%;">Once registered, you will have full access to the platform
                                         and its array of sustainability-focused features.</p>
                                       <p style="line-height: 140%;"> </p>
+                                      <p style="line-height: 140%;">
+                                        <b>Note: Please do not forward on this invite!</b>
+                                      </p>
+                                      <p style="line-height: 140%;">
+                                        <b>Invites are unique and linked to your email address, other users will not be able to accept the invite on your behalf. 
+                                          If you are not the appropriate recipient, please contact the sender and request that they issue a new invite to the appropriate person.</b></p>
+                                      <p style="line-height: 140%;"> </p>
                                       <p style="line-height: 140%;">Together, we can make a significant difference in
                                         promoting sustainability and building a brighter future. I look forward to having you
                                         join us on Enexo as we embark on this exciting sustainability journey!
@@ -559,17 +573,16 @@ async function sendReferralEmail(
       </body>
       
       </html>
-          `
-      );
+          `);
 
       const mailGunRes = await axios({
         method: "post",
         url: `https://api.eu.mailgun.net/v3/${EMAIL_DOMAIN}/messages`,
         headers: {
           Authorization: MAILGUN_AUTH,
-          ...data.getHeaders(),
+          ... data.getHeaders()
         },
-        data: data,
+        data: data
       });
       console.log(mailGunRes.data);
       resolve(mailGunRes.data);
@@ -580,5 +593,5 @@ async function sendReferralEmail(
 }
 
 module.exports = {
-  sendReferralEmail,
+  sendReferralEmail
 };

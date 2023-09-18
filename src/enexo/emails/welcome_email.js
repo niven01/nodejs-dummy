@@ -1,18 +1,19 @@
-const axios = require('axios');
-const FormData = require('form-data');
-const fsPromises = require('fs').promises;
-require('dotenv').config()
+const axios = require("axios");
+const FormData = require("form-data");
+const fsPromises = require("fs").promises;
+require("dotenv").config();
 
-const {EMAIL_USER, EMAIL_DOMAIN, MAILGUN_AUTH} = process.env
-
+const { EMAIL_USER, EMAIL_DOMAIN, MAILGUN_AUTH } = process.env;
 
 async function sendWelcomeEmail(user) {
   try {
     var data = new FormData();
-    data.append('from', `Enexo <${EMAIL_USER}>`);
-    data.append('to', user.email);
-    data.append('subject', `Welcome to Enexo! Your account has been verified`);
-    data.append('html', `<html>
+    data.append("from", `Enexo <${EMAIL_USER}>`);
+    data.append("to", user.email);
+    data.append("subject", `Welcome to Enexo! Your account has been verified`);
+    data.append(
+      "html",
+      `<html>
       <body
         style="font-family: 'Calibri', sans-serif; font-size: 11pt; margin: 0cm"
       >
@@ -195,26 +196,31 @@ async function sendWelcomeEmail(user) {
         </div>
       </body>
     </html>
-    `);
-    data.append('inline', await fsPromises.readFile('./assets/image_banner.png'), "image_banner.png");
+    `
+    );
+    data.append(
+      "inline",
+      await fsPromises.readFile("./assets/image_banner.png"),
+      "image_banner.png"
+    );
 
     const mailGunRes = await axios({
-      method: 'post',
+      method: "post",
       url: `https://api.eu.mailgun.net/v3/${EMAIL_DOMAIN}/messages`,
       headers: {
         Authorization: MAILGUN_AUTH,
-        ... data.getHeaders()
+        ...data.getHeaders(),
       },
-      data: data
-    })
+      data: data,
+    });
 
-    console.log(mailGunRes.data)
+    console.log(mailGunRes.data);
   } catch (error) {
-    console.log(error)
-    console.log("sendWelcomeEmail: ", error.message)
+    console.log(error);
+    console.log("sendWelcomeEmail: ", error.message);
   }
 }
 
 module.exports = {
-  sendWelcomeEmail
-}
+  sendWelcomeEmail,
+};

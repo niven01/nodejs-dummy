@@ -8,7 +8,7 @@ const uuidv4 = require("uuid/v4");
 const minioClient = require("./minio-client");
 const multer = require("multer");
 const upload = multer();
-const {GraphQLClient} = require("graphql-request");
+const {queryHasura, insertHasura} = require("../services/hasura");
 require("dotenv").config();
 const {getUserData, updateUserLogin} = require("../shared/app-data");
 const axios = require("axios");
@@ -33,18 +33,9 @@ const {
   AUTH_DOMAIN
 } = require("../config");
 
-const graphql_client = new GraphQLClient(HASURA_ENDPOINT, {
-  headers: {
-    "Content-Type": "application/json",
-    "x-hasura-admin-secret": HASURA_SECRET
-  }
-});
-
 const auth_tools = require("../shared/auth-tools");
 
 let router = express.Router();
-
-const schema_name = USER_MANAGEMENT_DATABASE_SCHEMA_NAME === "public" ? "" : USER_MANAGEMENT_DATABASE_SCHEMA_NAME.toString().toLowerCase() + "_";
 
 // REGISTER ROUTE
 router.post("/register", async (req, res, next) => {
@@ -80,15 +71,7 @@ router.post("/register", async (req, res, next) => {
   username = username.toLowerCase();
 
   if (invite_token) {
-    const inviteCheck = await axios({
-      url: HASURA_ENEXO_ENDPOINT,
-      method: "POST",
-      headers: {
-        "x-hasura-admin-secret": HASURA_ENEXO_SECRET
-      },
-      data: JSON.stringify(
-        {
-          query: `query MyQuery($invite_token: uuid!, $email: String!) {
+    const inviteCheck = await queryHasura(`query MyQuery($invite_token: uuid!, $email: String!) {
           tenant_invite(where: {invite_token: {_eq: $invite_token}, email: {_eq: $email}}) {
             id
             tenant_id
@@ -96,17 +79,9 @@ router.post("/register", async (req, res, next) => {
             is_admin
           }
         }
-        `,
-          variables: {
-            invite_token,
-            email: username
-          }
-        }
-      )
-    });
-
-    if (inviteCheck && inviteCheck.data && inviteCheck.data.data) {
-      const checkResult = inviteCheck.data.data.tenant_invite[0];
+        `, {invite_token, email: username});
+    if (inviteCheck) {
+      const checkResult = inviteCheck;
       inviteParams = checkResult;
       confirmedInvite = true;
       sendWelcomeEmail({email: username});
@@ -127,9 +102,9 @@ router.post("/register", async (req, res, next) => {
   // insert user
   query = `
     mutation (
-      $user: ${schema_name}users_insert_input!
+      $user: users_insert_input!
     ) {
-      insert_${schema_name}users(
+      insert_users(
         objects: [$user]
       ) {
         affected_rows
@@ -149,12 +124,12 @@ router.post("/register", async (req, res, next) => {
     invite_token
   };
   if (confirmedInvite) {
-    userObject.auth_id = inviteParams.id;
+    console.log("this is a confirmed invite", inviteParams, userObject);
+    userObject.auth_id = inviteParams[0].id;
   }
 
   try {
-    await graphql_client.request(query, {user: userObject});
-
+    data = await insertHasura(query, {user: userObject});
     if (validation_method === "SMS") { // SEND SMS MESSAGE //
 
       const accountSid = TWILIO_ACCOUNT_SID;
@@ -219,7 +194,7 @@ router.post("/logout", async (req, res, next) => {
   query get_refresh_token(
     $refresh_token: uuid!
   ) {
-    ${schema_name}refresh_tokens (
+    refresh_tokens (
       where: {
         refresh_token: { _eq: $refresh_token }
       }
@@ -233,20 +208,20 @@ router.post("/logout", async (req, res, next) => {
 
   let hasura_data;
   try {
-    hasura_data = await graphql_client.request(query, {refresh_token});
+    hasura_data = await queryHasura(query, {refresh_token});
   } catch (e) {
     console.error(e);
     return next(Boom.unauthorized("Invalid refresh token request"));
   }
 
-  const user_id = hasura_data[`${schema_name}refresh_tokens`][0].user.id;
+  const user_id = hasura_data[0].user.id;
 
   // Clear existing refresh tokens
   removeTokensQuery = `
       mutation (
         $user_id: Int!
       ) {
-        delete_${schema_name}refresh_tokens (
+        delete_refresh_tokens (
           where: {
             user_id: { _eq: $user_id }
           }
@@ -256,7 +231,8 @@ router.post("/logout", async (req, res, next) => {
       }
     `;
   try {
-    const removed = await graphql_client.request(removeTokensQuery, {user_id});
+    const removed = await queryHasura(removeTokensQuery, {user_id});
+    console.log("removed token", removed);
   } catch (e) {
     console.error(e);
     // return next(Boom.badImplementation('Could not remove old refresh tokens'));
@@ -268,7 +244,7 @@ router.post("/logout", async (req, res, next) => {
 
 // LOGIN ROUTE
 router.post("/login", async (req, res, next) => { // validate username and password
-  const schema = Joi.object().keys({username: Joi.string().required(), password: Joi.string().required(), application: Joi.string().required()});
+  const schema = Joi.object().keys({username: Joi.string().required(), password: Joi.string().required()});
 
   const {error, value} = schema.validate(req.body);
 
@@ -276,14 +252,14 @@ router.post("/login", async (req, res, next) => { // validate username and passw
     return next(Boom.badRequest(error.details[0].message));
   }
 
-  const {username, password, application} = value;
+  const {username, password} = value;
   // const { username, password } = value;
 
   let query = `
   query (
     $username: String!
   ) {
-    ${schema_name}users (
+    users (
       where: {
         username: { _eq: $username}
       }
@@ -296,9 +272,6 @@ router.post("/login", async (req, res, next) => { // validate username and passw
       default_role
       auth_id
       is_verified
-      roles: users_x_roles {
-        role
-      }
       ${
     USER_FIELDS.join("\n")
   }
@@ -306,22 +279,27 @@ router.post("/login", async (req, res, next) => { // validate username and passw
   }
   `;
 
-  let hasura_data;
+  let login_data;
   try {
-    hasura_data = await graphql_client.request(query, {username});
+    try {
+      login_data = await queryHasura(query, {username});
+    } catch (e) {
+      console.error(e);
+      // console.error('Error connection to GraphQL');
+      return next(Boom.unauthorized("Unable to find 'user'"));
+    }
   } catch (e) {
     console.error(e);
     // console.error('Error connection to GraphQL');
     return next(Boom.unauthorized("Unable to find 'user'"));
   }
 
-  if (hasura_data[`${schema_name}users`].length === 0) { // console.error("No user with this 'username'");
+  if (login_data && login_data.length === 0) { // console.error("No user with this 'username'");
     return next(Boom.unauthorized("Invalid username or password"));
   }
 
   // check if we got any user back
-  const user = hasura_data[`${schema_name}users`][0];
-
+  const user = login_data[0];
   if (user.is_verified === false) {
     return next(Boom.unauthorized("Please verify your account or contact support."));
   }
@@ -337,16 +315,16 @@ router.post("/login", async (req, res, next) => { // validate username and passw
 
   // Get tenant_id from correspoding app db
   try {
-    appUserData = await getUserData(user.auth_id, application);
+    appUserData = await getUserData(user.auth_id);
     user.tenant_id = appUserData ?. tenant_id || "";
   } catch (e) {
     console.log(e);
   }
 
   // User is already registered with enexo so update last_login column
-  if (user.tenant_id && application === "enexo") {
+  if (user.tenant_id) {
     try {
-      await updateUserLogin(user.auth_id, application);
+      await updateUserLogin(user.auth_id);
     } catch (e) {
       console.log(e);
     }
@@ -357,7 +335,7 @@ router.post("/login", async (req, res, next) => { // validate username and passw
     mutation (
       $user_id: Int!
     ) {
-      delete_${schema_name}refresh_tokens (
+      delete_refresh_tokens (
         where: {
           user_id: { _eq: $user_id }
         }
@@ -367,14 +345,14 @@ router.post("/login", async (req, res, next) => { // validate username and passw
     }
   `;
   try {
-    await graphql_client.request(removeTokensQuery, {user_id: user.id});
+    await insertHasura(removeTokensQuery, {user_id: user.id});
   } catch (e) {
     console.error(e);
     // return next(Boom.badImplementation('Could not remove old refresh tokens'));
   }
   // End of Clear existing refresh tokens
 
-  const jwt_token = await auth_tools.generateJwtToken(user, application);
+  const jwt_token = await auth_tools.generateJwtToken(user);
   const jwt_token_expiry = new Date(new Date().getTime() + JWT_TOKEN_EXPIRES * 60 * 1000);
 
   console.log("jwt_token");
@@ -383,9 +361,9 @@ router.post("/login", async (req, res, next) => { // validate username and passw
   // generate refresh token and put in database
   query = `
   mutation (
-    $refresh_token_data: ${schema_name}refresh_tokens_insert_input!
+    $refresh_token_data: refresh_tokens_insert_input!
   ) {
-    insert_${schema_name}refresh_tokens (
+    insert_refresh_tokens (
       objects: [$refresh_token_data]
     ) {
       affected_rows
@@ -395,7 +373,7 @@ router.post("/login", async (req, res, next) => { // validate username and passw
 
   const refresh_token = uuidv4();
   try {
-    await graphql_client.request(query, {
+    await insertHasura(query, {
       refresh_token_data: {
         user_id: user.id,
         refresh_token: refresh_token,
@@ -429,29 +407,11 @@ router.post("/login", async (req, res, next) => { // validate username and passw
 
 // REFRESH TOKEN ROUTE
 router.post("/refresh-token", async (req, res, next) => {
-  const schema = Joi.object().keys({application: Joi.string().required()});
-
-  const {error, value} = schema.validate(req.body);
-
-  if (error) {
-    return next(Boom.badRequest(error.details[0].message));
-  }
-
-  const {application} = value;
-
   const refresh_token = req.cookies["refresh_token"];
-  console.log("refresh_token");
-  console.log(refresh_token);
-
-  let query = `
-    query get_refresh_token(
-      $refresh_token: uuid!
-    ) {
-      ${schema_name}refresh_tokens (
-        where: {
-          refresh_token: { _eq: $refresh_token }
-        }
-      ) {
+  let hasura_data;
+  try {
+    hasura_data = await queryHasura(`query get_refresh_token($refresh_token: uuid!) {
+      refresh_tokens(where: {refresh_token: {_eq: $refresh_token}}) {
         user {
           id
           username
@@ -461,35 +421,21 @@ router.post("/refresh-token", async (req, res, next) => {
           first_name
           last_name
           auth_id
-          roles: users_x_roles {
-            role
-          }
-          ${
-    USER_FIELDS.join("\n")
-  }
         }
       }
-    }
-  `;
-
-  let hasura_data;
-  try {
-    hasura_data = await graphql_client.request(query, {refresh_token});
+    }`, {refresh_token});
   } catch (e) {
     console.error(e);
     return next(Boom.unauthorized("Invalid refresh token request"));
   }
-
-  console.log("------------------------");
-  console.log("hasura_data");
-  console.log(hasura_data);
-  console.log(hasura_data[`${schema_name}refresh_tokens`]);
-
-  if (hasura_data[`${schema_name}refresh_tokens`].length === 0) {
+  if (! hasura_data || hasura_data.length === 0) {
     return next(Boom.unauthorized("invalid refresh token"));
   }
 
-  const user = hasura_data[`${schema_name}refresh_tokens`][0].user;
+  const user = hasura_data[0].user;
+  if (! user || ! user.id) {
+    return next(Boom.unauthorized("Error fetching user"));
+  }
   const user_id = user.id;
 
   // delete current refresh token and generate a new, and insert the
@@ -501,7 +447,7 @@ router.post("/refresh-token", async (req, res, next) => {
     $new_refresh_token_data: refresh_tokens_insert_input!
     $user_id: Int!
   ) {
-    delete_${schema_name}refresh_tokens (
+    delete_refresh_tokens (
       where: {
         _and: [{
           refresh_token: { _eq: $old_refresh_token }
@@ -512,7 +458,7 @@ router.post("/refresh-token", async (req, res, next) => {
     ) {
       affected_rows
     }
-    insert_${schema_name}refresh_tokens (
+    insert_refresh_tokens (
       objects: [$new_refresh_token_data]
     ) {
       affected_rows
@@ -522,7 +468,7 @@ router.post("/refresh-token", async (req, res, next) => {
 
   const new_refresh_token = uuidv4();
   try {
-    await graphql_client.request(query, {
+    await insertHasura(query, {
       old_refresh_token: refresh_token,
       new_refresh_token_data: {
         user_id: user_id,
@@ -539,14 +485,14 @@ router.post("/refresh-token", async (req, res, next) => {
 
   // Get tenant_id from correspoding app db
   try {
-    appUserData = await getUserData(user.auth_id, application);
+    appUserData = await getUserData(user.auth_id);
     user.tenant_id = appUserData ?. tenant_id || "";
   } catch (e) {
     console.log(e);
   }
 
   // generate new jwt token
-  const jwt_token = await auth_tools.generateJwtToken(user, application);
+  const jwt_token = await auth_tools.generateJwtToken(user);
   const jwt_token_expiry = new Date(new Date().getTime() + JWT_TOKEN_EXPIRES * 60 * 1000);
 
   res.cookie("refresh_token", new_refresh_token, {
@@ -578,7 +524,7 @@ router.post("/upload", upload.single("avatar"), async (req, res, next) => {
   query get_refresh_token(
     $refresh_token: uuid!
   ) {
-    ${schema_name}refresh_tokens (
+    refresh_tokens (
       where: {
         refresh_token: { _eq: $refresh_token }
       }
@@ -593,17 +539,17 @@ router.post("/upload", upload.single("avatar"), async (req, res, next) => {
 
   let hasura_data;
   try {
-    hasura_data = await graphql_client.request(query, {refresh_token});
+    hasura_data = await queryHasura(query, {refresh_token});
   } catch (e) {
     console.error(e);
     return next(Boom.unauthorized("Invalid refresh token request"));
   }
 
-  if (hasura_data[`${schema_name}refresh_tokens`].length === 0) {
+  if (hasura_data.length === 0) {
     return next(Boom.unauthorized("invalid refresh token"));
   }
 
-  const user = hasura_data[`${schema_name}refresh_tokens`][0].user;
+  const user = hasura_data[0].user;
 
   let filename = user.auth_id;
   filename = "users/" + filename;
@@ -633,7 +579,7 @@ router.post("/validate", async (req, res, next) => { // validate username and pa
   query (
     $username: String!
   ) {
-    ${schema_name}users (
+    users (
       where: {
         username: { _eq: $username}
       }
@@ -644,55 +590,43 @@ router.post("/validate", async (req, res, next) => { // validate username and pa
       active
       default_role
       auth_id
-      roles: users_x_roles {
-        role
-      }
-      ${
-    USER_FIELDS.join("\n")
-  }
     }
   }
   `;
 
   let hasura_data;
   try {
-    hasura_data = await graphql_client.request(query, {username: username.toLowerCase()});
+    hasura_data = await queryHasura(query, {username: username.toLowerCase()});
   } catch (e) {
     console.error(e);
     // console.error('Error connection to GraphQL');
     return next(Boom.unauthorized("Unable to find 'user'"));
   }
-
-  if (hasura_data[`${schema_name}users`].length === 0) { // console.error("No user with this 'username'");
+  if (hasura_data.length === 0) { // console.error("No user with this 'username'");
     return next(Boom.unauthorized("Invalid 'username'"));
   }
 
   // check if we got any user back
-  const user = hasura_data[`${schema_name}users`][0];
+  const user = hasura_data[0];
 
   // see if code matches
   if (user.validation_attempts < 1) {
     return next(Boom.unauthorized("Maximum attempts reached. Please request a new validation code."));
   }
-
   const match = validationCode === user.validation_code;
-
   if (! match) {
     console.error("Validation code does not match");
-    query = {
-      query: `mutation MyMutation($username: String!, $validation_attempts: Int!) {
+
+    let query = `mutation MyMutation($username: String!, $validation_attempts: Int!) {
        update_users(where: {username: {_eq: $username}}, _set: {validation_attempts: $validation_attempts}) {
          affected_rows
        }
-      }`,
-      variables: {
+      }`;
+    try {
+      response = await insertHasura(query, {
         username: username.toLowerCase(),
         validation_attempts: user.validation_attempts - 1
-      }
-    };
-    try {
-      response = await graphql_client.request(query.query, query.variables);
-      console.log(response);
+      });
       if (user.validation_attempts < 1) {
         return next(Boom.unauthorized("Maximum attempts reached. Please request a new validation code."));
       } else {
@@ -703,46 +637,26 @@ router.post("/validate", async (req, res, next) => { // validate username and pa
       return next(Boom.unauthorized("Invalid account or validation code"));
     }
   } else {
-    query = {
-      query: `mutation MyMutation($username: String!) {
+    let query = `mutation MyMutation($username: String!) {
        update_users(where: {username: {_eq: $username}}, _set: {default_role: "user", is_verified: true}) {
          affected_rows
        }
-      }`,
-      variables: {
-        username: username.toLowerCase()
-      }
-    };
-
+      }`;
     try {
-      response = await graphql_client.request(query.query, query.variables);
-      console.log(response);
+      response = await insertHasura(query, {username: username.toLowerCase()});
       res.send("OK");
       try {
-        const axios = require("axios");
-        const updateInviteStatus = await axios({
-          url: HASURA_ENEXO_ENDPOINT,
-          method: "POST",
-          headers: {
-            "x-hasura-admin-secret": HASURA_ENEXO_SECRET
-          },
-          data: JSON.stringify(
-            {
-              query: `mutation MyMutation($id: uuid!, $_set: user_set_input = {}) {
+        const updateInviteStatus = await insertHasura(`mutation MyMutation($id: uuid!, $_set: user_set_input = {}) {
             update_user_by_pk(pk_columns: {id: $id}, _set: $_set) {
               status
               id
             }
           }
-          `,
-              variables: {
-                id: user.auth_id,
-                _set: {
-                  status: "active"
-                }
-              }
-            }
-          )
+          `, {
+          id: user.auth_id,
+          _set: {
+            status: "active"
+          }
         });
         console.log(updateInviteStatus);
       } catch (error) {
@@ -769,20 +683,16 @@ router.post("/resend", async (req, res, next) => { // validate username
   const {username} = value;
   const newValidationCode = Math.floor(100000 + Math.random() * 900000).toString();
 
-  query = {
-    query: `mutation MyMutation($username: String = "", $validation_code: String = "") {
+  let query = `mutation MyMutation($username: String = "", $validation_code: String = "") {
       update_users(where: {username: {_eq: $username}}, _set: {validation_code: $validation_code, validation_attempts: 3}) {
         affected_rows
       }
-    }`,
-    variables: {
+    }`;
+  try {
+    await insertHasura(query, {
       username: username.toLowerCase(),
       validation_code: newValidationCode
-    }
-  };
-  try {
-    response = await graphql_client.request(query.query, query.variables);
-    console.log(response);
+    });
 
     // Send email with new code
     var data = new FormData();
@@ -831,7 +741,7 @@ router.post("/password-update", async (req, res, next) => {
     query get_refresh_token(
       $refresh_token: uuid!
     ) {
-      ${schema_name}refresh_tokens (
+      refresh_tokens (
         where: {
           refresh_token: { _eq: $refresh_token }
         }
@@ -845,9 +755,6 @@ router.post("/password-update", async (req, res, next) => {
           first_name
           last_name
           auth_id
-          roles: users_x_roles {
-            role
-          }
           ${
     USER_FIELDS.join("\n")
   }
@@ -858,17 +765,17 @@ router.post("/password-update", async (req, res, next) => {
 
   let hasura_data;
   try {
-    hasura_data = await graphql_client.request(query, {refresh_token});
+    hasura_data = await queryHasura(query, {refresh_token});
   } catch (e) {
     console.error(e);
     return next(Boom.unauthorized("Invalid refresh token request"));
   }
-
-  if (hasura_data[`${schema_name}refresh_tokens`].length === 0) { // console.error("No user with this 'username'");
+  console.log(hasura_data);
+  if (hasura_data.length === 0) { // console.error("No user with this 'username'");
     return next(Boom.unauthorized("Couldn't find user."));
   }
 
-  const user = hasura_data[`${schema_name}refresh_tokens`][0].user;
+  const user = hasura_data[0].user;
 
   // see if password hashes matches
   const match = await bcrypt.compare(password, user.password);
@@ -901,7 +808,7 @@ router.post("/password-update", async (req, res, next) => {
   `;
 
   try {
-    await graphql_client.request(query, {
+    await insertHasura(query, {
       usersPk: {
         id: user.id
       },
@@ -944,20 +851,20 @@ router.post("/forgot-password", async (req, res, next) => { // validate username
 
   let hasura_data;
   try {
-    hasura_data = await graphql_client.request(query, {username});
+    hasura_data = await queryHasura(query, {username});
   } catch (e) {
     console.error(e);
     console.error("GraphQL error'");
     return next(Boom.badRequest("Sorry, we've encountered a problem. Please try again later."));
   }
 
-  if (hasura_data[`users`].length === 0) { // Don't show if user exist.
+  if (hasura_data.length === 0) { // Don't show if user exist.
     console.error("No user with this 'username'");
     return res.send("OK");
     // return next(Boom.unauthorized('Check your email to continue password reset process.'));
   }
 
-  const user = hasura_data[`users`][0];
+  const user = hasura_data[0];
 
   // Create token and hash it
 
@@ -990,14 +897,12 @@ router.post("/forgot-password", async (req, res, next) => { // validate username
   let queryRes;
 
   try {
-    queryRes = await graphql_client.request(query.query, query.variables);
+    queryRes = await insertHasura(query.query, query.variables);
   } catch (e) {
     console.error(e);
     return next(Boom.badRequest("Sorry, we've encountered a problem. Please try again later."));
   }
-
-  // Send email with the link to reset password
-  if (queryRes ?. insert_reset_tokens_one ?. id) {
+  if (queryRes ?. id) {
     var data = new FormData();
     data.append("from", `Enexo <${EMAIL_USER}>`);
     data.append("to", username);
@@ -1015,9 +920,7 @@ router.post("/forgot-password", async (req, res, next) => { // validate username
     };
 
     try {
-      axios(config).then(function (response) {
-        console.log(JSON.stringify(response.data));
-      }).catch(function (error) {
+      axios(config).then(function (response) {}).catch(function (error) {
         console.log(error);
       });
     } catch (e) {
@@ -1038,7 +941,7 @@ router.post("/reset-password", async (req, res, next) => { // validate username 
   }
 
   const {username, passwordResetToken, passwordNew, passwordNewConfirm} = value;
-
+  console.log(value);
   // check if user exists and get it
 
   let query = `
@@ -1057,54 +960,71 @@ router.post("/reset-password", async (req, res, next) => { // validate username 
 
   let hasura_data;
   try {
-    hasura_data = await graphql_client.request(query, {username});
+    hasura_data = await axios({
+      url: HASURA_ENEXO_ENDPOINT,
+      headers: {
+        "x-hasura-admin-secret": HASURA_ENEXO_SECRET
+      },
+      method: "POST",
+      data: JSON.stringify(
+        {query, variables: {
+            username
+          }}
+      )
+    });
   } catch (e) {
     console.error(e);
     console.error("GraphQL error'");
     return next(Boom.badRequest("Sorry, we've encountered a problem. Please try again later."));
   }
-
-  if (hasura_data[`users`].length === 0) { // Don't show if user exist.
+  if (hasura_data.data.data.users.length === 0) { // Don't show if user exist.
     console.error("No user with this 'username'");
     return next(Boom.badRequest("Sorry we couldn't process your request. Please check your details."));
   }
 
-  const user = hasura_data[`users`][0];
-
+  const user = hasura_data.data.data.users[0].id;
   // Get db token compare it and check expiration time
-  query = {
-    query: `query resetToken($userId: Int!) {
+  query = `query resetToken($userId: Int!) {
       reset_tokens(where: {user_id: {_eq: $userId}}) {
         user_id
         reset_token
         expires_at
       }
-    }`,
-    variables: {
-      userId: user.id
-    }
-  };
+    }`;
 
   let response;
 
   try {
-    response = await graphql_client.request(query.query, query.variables);
-
-    console.log(response);
+    response = await axios({
+      url: HASURA_ENEXO_ENDPOINT,
+      headers: {
+        "x-hasura-admin-secret": HASURA_ENEXO_SECRET
+      },
+      method: "POST",
+      data: JSON.stringify(
+        {
+          query,
+          variables: {
+            userId: user
+          }
+        }
+      )
+    });
+    console.log(response.data);
   } catch (e) {
     console.error(e);
   }
-
-  if (response.reset_tokens.length === 0 ||
+  console.log(response.data.data.reset_tokens);
+  if (response.data.data.reset_tokens.length === 0 ||
   // does user match
-  response.reset_tokens[0].user_id !== user.id ||
+  response.data.data.reset_tokens[0].user_id !== user ||
   // is token the same
-  response.reset_tokens[0].reset_token !== passwordResetToken) {
+  response.data.data.reset_tokens[0].reset_token !== passwordResetToken) {
     return next(Boom.badRequest("Sorry we couldn't process your request. Please check your details."));
   }
 
   // is token expired
-  if (new Date(response.reset_tokens[0].expires_at).getTime() < new Date().getTime()) {
+  if (new Date(response.data.data.reset_tokens[0].expires_at).getTime() < new Date().getTime()) {
     return next(Boom.unauthorized("Reset link has expired."));
   }
 
@@ -1131,9 +1051,9 @@ router.post("/reset-password", async (req, res, next) => { // validate username 
   `;
 
   try {
-    await graphql_client.request(query, {
+    await insertHasura(query, {
       usersPk: {
-        id: user.id
+        id: user
       },
       userObj: {
         password: password_hash
@@ -1149,7 +1069,7 @@ router.post("/reset-password", async (req, res, next) => { // validate username 
       mutation (
         $userId: Int!
       ) {
-        delete_${schema_name}reset_tokens (
+        delete_reset_tokens (
           where: {
             user_id: { _eq: $userId }
           }
@@ -1159,8 +1079,7 @@ router.post("/reset-password", async (req, res, next) => { // validate username 
       }
     `;
   try {
-    const removed = await graphql_client.request(removeToken, {userId: user.id});
-
+    const removed = await insertHasura(removeToken, {userId: user});
     console.log("removed token", removed);
   } catch (e) {
     console.error(e);
