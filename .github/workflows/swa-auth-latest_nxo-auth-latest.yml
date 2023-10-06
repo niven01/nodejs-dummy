@@ -50,7 +50,7 @@ jobs:
         id: deploy-to-webapp
         uses: azure/webapps-deploy@v2
         with:
-          app-name: 'nxo-auth-latest'
+          app-name: 'UKS-RG-NXO-AUTH-APP-DEV'
           slot-name: 'Production'
           publish-profile: ${{ secrets.NXO_APP_SERVICE_DEV_PROFILE }}
           package: .
