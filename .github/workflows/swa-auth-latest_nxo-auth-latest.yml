@@ -52,5 +52,5 @@ jobs:
         with:
           app-name: 'nxo-auth-latest'
           slot-name: 'Production'
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_F7225FD625FE41D6B02AF610B9239843 }}
+          publish-profile: ${{ secrets.NXO_APP_SERVICE_DEV_PROFILE }}
           package: .
